@@ -1,0 +1,142 @@
+name: CI on ECR
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_minor:
+        description: "Minor를 올리겠습니까? (true면 minor+1, 아니면 patch+1)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+  REPO_PREFIX: backend-service
+
+jobs:
+  build-all:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push all top-level folders
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          DEFAULT_MAJOR: "1"
+          ALLOW_CREATE: "true"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT_BUMP_MINOR="${{ github.event.inputs.bump_minor }}"
+          NOW_TS=$(date -u +"%Y%m%dT%H%M%SZ")
+          echo "CURRENT UTC: ${NOW_TS}"
+
+          mapfile -t FOLDERS < <(find . -maxdepth 1 -mindepth 1 -type d -printf '%P\n' \
+                                  | grep -Ev '^\.(git|github|vscode)$' || true)
+          echo "Top-level dirs: ${FOLDERS[*]:-<none>}"
+          if [ ${#FOLDERS[@]} -eq 0 ]; then
+            echo "No top-level folders found. Nothing to do."
+            exit 0
+          fi
+
+          require_repo() {
+            local repo="$1"
+            if aws ecr describe-repositories --repository-names "$repo" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "ECR repo exists: $repo"
+              return 0
+            fi
+            if [ "${ALLOW_CREATE}" != "true" ]; then
+              echo "ERROR: ECR repo not found and creation disabled: $repo"
+              return 1
+            fi
+            echo "Creating ECR repo: $repo"
+            aws ecr create-repository --repository-name "$repo" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+            if aws ecr describe-repositories --repository-names "$repo" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "ECR repo ready: $repo"
+              return 0
+            fi
+            echo "ERROR: Cannot ensure ECR repo: $repo (missing permission or invalid name)."
+            return 1
+          }
+
+          for dir in "${FOLDERS[@]}"; do
+            if   [ -f "$dir/Dockerfile" ]; then DOCKERFILE="$dir/Dockerfile"
+            elif [ -f "$dir/dockerfile" ]; then DOCKERFILE="$dir/dockerfile"
+            else
+              echo "Skip $dir (no Dockerfile/dockerfile)"
+              continue
+            fi
+
+            repo_name="${REPO_PREFIX}/${dir}"
+            echo "=== Processing: $dir (Dockerfile: $DOCKERFILE) -> ECR repo: ${repo_name}"
+
+            EXISTING=$(
+              aws ecr describe-images \
+                --repository-name "${repo_name}" \
+                --query "imageDetails[].imageTags[]" \
+                --output text 2>/dev/null | tr '\t' '\n' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true
+            )
+            MAJOR="${DEFAULT_MAJOR}"
+
+            if [ -n "${EXISTING}" ]; then
+              CUR_MINOR_MAX=$(printf '%s\n' ${EXISTING} \
+                | awk -F'[v\\.]' -v maj="${MAJOR}" '$2==maj {print $3}' \
+                | sort -n | tail -n1)
+              CUR_MINOR_MAX="${CUR_MINOR_MAX:-0}"
+            else
+              CUR_MINOR_MAX="0"
+            fi
+
+            BUMP=$(echo "${INPUT_BUMP_MINOR:-}" | tr '[:upper:]' '[:lower:]')
+
+            if [ "${BUMP}" = "true" ]; then
+              MINOR=$(( CUR_MINOR_MAX + 1 ))
+              PATCH="0"
+              BUMP_KIND="minor(+1)"
+            else
+              MINOR="${CUR_MINOR_MAX}"
+              if [ -n "${EXISTING}" ]; then
+                PATCH_MAX=$(printf '%s\n' ${EXISTING} \
+                  | awk -F'[v\\.]' -v maj="${MAJOR}" -v min="${MINOR}" '$2==maj && $3==min {print $4}' \
+                  | sort -n | tail -n1)
+                PATCH=$([ -z "${PATCH_MAX:-}" ] && echo 0 || echo $((PATCH_MAX + 1)))
+              else
+                PATCH="0"
+              fi
+              BUMP_KIND="patch(+1)"
+            fi
+
+            VERSION_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+            echo "::notice:: [${repo_name}] bump=${BUMP_KIND} -> ${VERSION_TAG}"
+            echo "Resolved version for ${repo_name}: ${VERSION_TAG}"
+
+            docker build -f "$DOCKERFILE" \
+              -t "${REGISTRY}/${repo_name}:latest" \
+              -t "${REGISTRY}/${repo_name}:${VERSION_TAG}" \
+              "$dir"
+
+            require_repo "$repo_name" || exit 1
+
+            docker push "${REGISTRY}/${repo_name}:${VERSION_TAG}"
+            docker push "${REGISTRY}/${repo_name}:latest"
+            echo "Pushed: ${REGISTRY}/${repo_name}:${VERSION_TAG} and :latest"
+          done
