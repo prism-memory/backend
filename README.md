@@ -2,12 +2,12 @@
 
 ## 목차
 
-1. [논의 사항](#논의-사항)
-2. [Backend](#backend)
-3. [CI/CD](#cicd)
-4. [Git](#git)
+1. [협의 사항](#1-협의-사항)
+2. [Backend](#2-backend)
+3. [CI/CD](#3-cicd)
+4. [Git 관리](#4-git-관리)
 
-## 1. 논의 사항
+## 1. 협의 사항
 
 - 폴더 구조는 기능 단위로 분리
 - 각 기능 디렉토리에는 반드시 `Dockerfile` 포함
@@ -61,29 +61,29 @@ CI/CD 파이프라인은 main 브랜치 push하면 자동으로 실행됩니다.
 
 1. commit.template 실행
 
-```bash
-git config commit.template .gitmessage.txt
-```
+   ```bash
+   git config commit.template .gitmessage.txt
+   ```
 
 2. core.edit 실헹
 
-```bash
-git config core.editor "code --wait"
-```
+   ```bash
+   git config core.editor "code --wait"
+   ```
 
 3. 적용 확인 방법
 
-```bash
-git config --get commit.template
-```
+   ```bash
+   git config --get commit.template
+   ```
 
 ### 4.2. IDE에서 사용 방법
 
 1. IDE에서 Commit 입력(UI 또는 terminal 가능)
 2. 커밋 메시지 작성
 
-- COMMIT_EDITMSG 파일 생성되는데 해당 부분 예시에 적힌 부분 (Option) 부분 제외하고 전체 입력
-- Commit 취소하고 싶다면, 저장하지말고 바로 닫기
+   - COMMIT_EDITMSG 파일 생성되는데 해당 부분 예시에 적힌 부분 (Option) 부분 제외하고 전체 입력
+   - Commit 취소하고 싶다면, 저장하지말고 바로 닫기
 
 3. COMMIT_EDITMSG 파일 저장하고 닫으면 commit 자동 완료
 
