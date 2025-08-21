@@ -5,16 +5,17 @@
 1. [논의 사항](#논의-사항)
 2. [Backend](#backend)
 3. [CI/CD](#cicd)
+4. [Git](#git)
 
-## 논의 사항
+## 1. 논의 사항
 
 - 폴더 구조는 기능 단위로 분리
 - 각 기능 디렉토리에는 반드시 `Dockerfile` 포함
 - main 브랜치에 push 시 자동 빌드하여 ECR로 Image Push 진행
 
-## Backend
+## 2. Backend
 
-### Backend 담당자가 지켜야할 규칙
+### 2.1. Backend 담당자가 지켜야할 규칙
 
 백엔드 개발자가 지켜야 할 기본 규칙은 다음과 같습니다.
 
@@ -25,11 +26,13 @@
   2. `Dockerfile` 작성
   3. main 브랜치에 push → CI/CD 파이프라인 실행
 
-## CI/CD
+## 3. CI/CD
 
 CI/CD 파이프라인은 main 브랜치 push하면 자동으로 실행됩니다.
 
-### Workflow 개요
+### 3.1. 개요
+
+#### 3.1.1. Workflow 개요
 
 - GitHub Actions → AWS OIDC Role 인증
 - Amazon ECR 로그인 (`aws-actions/amazon-ecr-login@v2`)
@@ -39,7 +42,7 @@ CI/CD 파이프라인은 main 브랜치 push하면 자동으로 실행됩니다.
   - 최신: `v1.0.1`, `latest`
   - 이전: `v1.0.0`
 
-### 버전 관리 규칙
+### 3.1.2. 버전 관리 규칙
 
 - **major**: 1 (기본값)
 - **minor**: true 선택시 증가 / Actions -> CI on ECR에서 Run workflow 선택 -> 체크박스 Check하여 실행하면 증가
@@ -48,6 +51,38 @@ CI/CD 파이프라인은 main 브랜치 push하면 자동으로 실행됩니다.
   - `v1.0.3 → v1.0.4` (자동 Patch 증가)
   - `minor` 지정 시 → `v1.1.0`
 
-### 빌드 확인
+### 3.1.3. 빌드 확인
 
 - `{AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com/backend-service/<feature>:<Tag>`
+
+## 4. Git 관리
+
+### 4.1. .gitmessage 적용 방법
+
+1. commit.template 실행
+
+```bash
+git config commit.template .gitmessage.txt
+```
+
+2. core.edit 실헹
+
+```bash
+git config core.editor "code --wait"
+```
+
+3. 적용 확인 방법
+
+```bash
+git config --get commit.template
+```
+
+### 4.2. IDE에서 사용 방법
+
+1. IDE에서 Commit 입력(UI 또는 terminal 가능)
+2. 커밋 메시지 작성
+
+- COMMIT_EDITMSG 파일 생성되는데 해당 부분 예시에 적힌 부분 (Option) 부분 제외하고 전체 입력
+- Commit 취소하고 싶다면, 저장하지말고 바로 닫기
+
+3. COMMIT_EDITMSG 파일 저장하고 닫으면 commit 자동 완료
