@@ -86,3 +86,27 @@ git config --get commit.template
 - Commit 취소하고 싶다면, 저장하지말고 바로 닫기
 
 3. COMMIT_EDITMSG 파일 저장하고 닫으면 commit 자동 완료
+
+### 4.3. Git Branch 전략
+
+> Git Flow는 현재 적용하기에 무겁다고 판단되어, 기준 브랜치 `main` 하나이며, 짧은 기능 브랜치에서 작업후 PR(Squash merge)로 `main`에 합칩니다.
+
+- 기준 브랜치 `main` : 항상 배포 가능한 상태
+- 작업 브랜치 규칙
+  - 예시
+    - `<type>/<JIRA-번호>-<기능>`
+    - `feat/SCRUM-217-upload-dnd`
+    - `fix/SCRUM-245-login-bug`
+    - `chore/SCRUM-201-upgrade-deps`
+  - `<type> 목록`
+    - feat : 새로운 기능 추가
+    - fix : 버그 수정
+    - docs : 문서 수정
+    - test : 테스트 코드 작업
+    - refactor : 코드 리팩토링 (기능 동작 변화 없음)
+    - style : 코드 의미에 영향을 주지 않는 변경사항
+    - chore : 빌드 부분 혹은 패키지 매니저 수정사항, 설정/의존성 등
+    - ci : CI/CD 작업
+- 권장 사항
+  - 브랜치는 **작게/짧게** 운용(7일 이내 Merge)
+  - 긴급 이슈는 `fix/SCRUM-xxx-hotfix-...`로 분리하여 바로 PR -> Squash merge
