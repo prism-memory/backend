@@ -1,16 +1,16 @@
-module github.com/prism-memory/backend/image-dispatcher
+module github.com/prism-memory/backend/image/step-function/image-resizer
 
 go 1.24.5
 
 require (
 	github.com/aws/aws-lambda-go v1.49.0
+	github.com/aws/aws-sdk-go-v2 v1.38.0
 	github.com/aws/aws-sdk-go-v2/config v1.31.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.87.0
 	github.com/cshum/vipsgen v1.1.2
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.0 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.5 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.3 // indirect
