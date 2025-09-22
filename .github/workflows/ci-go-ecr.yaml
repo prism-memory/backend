@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -46,15 +48,92 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 수동 실행 boolean 입력 (push/PR이면 빈 문자열)
           INPUT_BUMP_MINOR="${{ github.event.inputs.bump_minor }}"
+
           NOW_TS=$(date -u +"%Y%m%dT%H%M%SZ")
           echo "CURRENT UTC: ${NOW_TS}"
 
-          mapfile -t FOLDERS < <(find . -maxdepth 1 -mindepth 1 -type d -printf '%P\n' \
-                                  | grep -Ev '^\.(git|github|vscode)$' || true)
-          echo "Top-level dirs: ${FOLDERS[*]:-<none>}"
-          if [ ${#FOLDERS[@]} -eq 0 ]; then
-            echo "No top-level folders found. Nothing to do."
+          # 루트(1-depth)에 위치한 공용 Dockerfile 확인
+          if   [ -f "./Dockerfile" ]; then ROOT_DOCKERFILE="./Dockerfile"
+          elif [ -f "./dockerfile" ]; then ROOT_DOCKERFILE="./dockerfile"
+          else
+            echo "No top-level Dockerfile found. Nothing to do."
+            exit 0
+          fi
+
+          echo "Using root Dockerfile: ${ROOT_DOCKERFILE}"
+
+          # 새로운 디렉토리 구조: (A) 큰기능/특정기능/코드 (3-depth)
+          #                    (B) 큰기능/서비스분류/특정기능/코드 (4-depth)
+          # 숨김 디렉토리(., .github, 등) 제외
+          mapfile -t CANDIDATE_DIRS < <( { \
+              find . -mindepth 3 -maxdepth 3 -type d -printf '%P\n'; \
+              find . -mindepth 4 -maxdepth 4 -type d -printf '%P\n'; \
+            } | grep -Ev '(^|/)\.' | sort -u || true )
+          echo "3/4-depth dirs: ${CANDIDATE_DIRS[*]:-<none>}"
+          if [ ${#CANDIDATE_DIRS[@]} -eq 0 ]; then
+            echo "No 3/4-depth directories found. Nothing to do."
+            exit 0
+          fi
+
+          # Go 프로젝트만 대상으로 필터링 (main.go, go.mod, go.sum 동시 존재)
+          GO_TARGETS=()
+          for d in "${CANDIDATE_DIRS[@]}"; do
+            if [ -f "$d/main.go" ] && [ -f "$d/go.mod" ] && [ -f "$d/go.sum" ]; then
+              GO_TARGETS+=("$d")
+            fi
+          done
+          echo "Go build targets: ${GO_TARGETS[*]:-<none>}"
+          if [ ${#GO_TARGETS[@]} -eq 0 ]; then
+            echo "No Go targets found (Python or other types present). Nothing to do."
+            exit 0
+          fi
+
+          # 변경 파일 기반 선별 빌드 (PR/Push 기준으로 변경된 디렉토리만 빌드)
+          EVENT_NAME="${{ github.event_name }}"
+          REFRESH_ALL=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            REFRESH_ALL=true
+          fi
+
+          BASE_SHA=""
+          HEAD_SHA="${{ github.sha }}"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          CHANGED_FILES=""
+          if [ -n "$BASE_SHA" ]; then
+            CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)
+          fi
+          echo "Changed files between $BASE_SHA..$HEAD_SHA:"$'\n'"${CHANGED_FILES:-<none>}"
+
+          # 루트 Dockerfile이 변경되면 전체 리빌드
+          DF_REL="${ROOT_DOCKERFILE#./}"
+          if echo "$CHANGED_FILES" | grep -Fxq "$DF_REL"; then
+            echo "Root Dockerfile changed -> rebuild all Go targets"
+            REFRESH_ALL=true
+          fi
+
+          SELECTED_TARGETS=()
+          if [ "$REFRESH_ALL" = "true" ]; then
+            SELECTED_TARGETS=("${GO_TARGETS[@]}")
+          else
+            for d in "${GO_TARGETS[@]}"; do
+              if echo "$CHANGED_FILES" | grep -E "^${d}/" >/dev/null 2>&1; then
+                SELECTED_TARGETS+=("$d")
+              fi
+            done
+          fi
+
+          echo "Selected targets: ${SELECTED_TARGETS[*]:-<none>}"
+          if [ ${#SELECTED_TARGETS[@]} -eq 0 ]; then
+            echo "No changed Go targets to build. Nothing to do."
             exit 0
           fi
 
@@ -78,25 +157,21 @@ jobs:
             return 1
           }
 
-          for dir in "${FOLDERS[@]}"; do
-            if   [ -f "$dir/Dockerfile" ]; then DOCKERFILE="$dir/Dockerfile"
-            elif [ -f "$dir/dockerfile" ]; then DOCKERFILE="$dir/dockerfile"
-            else
-              echo "Skip $dir (no Dockerfile/dockerfile)"
-              continue
-            fi
-
+          for dir in "${SELECTED_TARGETS[@]}"; do
             repo_name="${REPO_PREFIX}/${dir}"
-            echo "=== Processing: $dir (Dockerfile: $DOCKERFILE) -> ECR repo: ${repo_name}"
+            echo "=== Processing: $dir (Dockerfile: ${ROOT_DOCKERFILE}) -> ECR repo: ${repo_name}"
 
+            # 기존 semver 태그 수집 (vX.Y.Z)
             EXISTING=$(
               aws ecr describe-images \
                 --repository-name "${repo_name}" \
                 --query "imageDetails[].imageTags[]" \
                 --output text 2>/dev/null | tr '\t' '\n' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true
             )
+
             MAJOR="${DEFAULT_MAJOR}"
 
+            # 현재 repo의 최대 MINOR 계산
             if [ -n "${EXISTING}" ]; then
               CUR_MINOR_MAX=$(printf '%s\n' ${EXISTING} \
                 | awk -F'[v\\.]' -v maj="${MAJOR}" '$2==maj {print $3}' \
@@ -106,13 +181,16 @@ jobs:
               CUR_MINOR_MAX="0"
             fi
 
+            # 입력값은 문자열("true"/"false")이므로 소문자로 정규화
             BUMP=$(echo "${INPUT_BUMP_MINOR:-}" | tr '[:upper:]' '[:lower:]')
 
             if [ "${BUMP}" = "true" ]; then
+              # 마이너 +1, 패치 0 초기화
               MINOR=$(( CUR_MINOR_MAX + 1 ))
               PATCH="0"
               BUMP_KIND="minor(+1)"
             else
+              # ↔ 현재 마이너에서 패치만 +1
               MINOR="${CUR_MINOR_MAX}"
               if [ -n "${EXISTING}" ]; then
                 PATCH_MAX=$(printf '%s\n' ${EXISTING} \
@@ -129,13 +207,16 @@ jobs:
             echo "::notice:: [${repo_name}] bump=${BUMP_KIND} -> ${VERSION_TAG}"
             echo "Resolved version for ${repo_name}: ${VERSION_TAG}"
 
-            docker build -f "$DOCKERFILE" \
+            # 도커 빌드
+            docker build -f "${ROOT_DOCKERFILE}" \
               -t "${REGISTRY}/${repo_name}:latest" \
               -t "${REGISTRY}/${repo_name}:${VERSION_TAG}" \
               "$dir"
 
+            # 푸시 전 레포 보장
             require_repo "$repo_name" || exit 1
 
+            # 푸시
             docker push "${REGISTRY}/${repo_name}:${VERSION_TAG}"
             docker push "${REGISTRY}/${repo_name}:latest"
             echo "Pushed: ${REGISTRY}/${repo_name}:${VERSION_TAG} and :latest"
